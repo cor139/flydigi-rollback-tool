@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+
+# PyInstaller build artifacts
+build/
+build2/
+dist/
+dist2/
+*.spec
+
+# Logs
+*.log
+
+# Local cert output (generated at runtime on user machines)
+*.pem
+*.key
+*.cer
+*.pfx
