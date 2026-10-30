@@ -458,11 +458,11 @@ def do_restore():
 # ---------------- UI ----------------
 GUIDE = [
     ("第 1 步", "仅适用于飞智黑武士5s"),
-    ("第 2 步", "程序会自动查找本机留存的固件备份 (Flydigi 应用升级时留下), 也可点 [选择固件] 手动指定 .bin 文件"),
+    ("第 2 步", "程序自动查找本机留存的固件备份, 也可点 [选择固件] 手动指定 .bin 文件"),
     ("第 3 步", "手柄用 USB 线或 Xbox 无线接收器连接到这台电脑"),
     ("第 4 步", "确认这台电脑已安装 [Flydigi Space Station] 应用 (能正常打开它)"),
     ("第 5 步", "勾选下方\"我已阅读\"后点 [① 一键启动劫持], 等日志出现 \"劫持已就绪\""),
-    ("第 6 步", "打开 Flydigi Space Station → 设置 → 固件版本, 页面会出现 9.9.9.9 的升级提示"),
+    ("第 6 步", "打开 Flydigi Space Station → 设置 → 固件版本, 会出现 9.9.9.9 的升级提示"),
     ("第 7 步", "点 [确认升级] — 之后什么都不要碰! 刷写中断开手柄可能导致手柄报废(变砖)"),
     ("第 8 步", "手柄重启后查看固件版本: 显示 1.0.5.4 即回退成功 (使用其他固件则显示对应版本)"),
     ("第 9 步", "无论成功与否, 回到本工具点 [② 一键还原系统], 否则 Flydigi 应用将无法联网!"),
@@ -501,9 +501,9 @@ def apply_win11_window(root):
 def build_ui():
     root = tk.Tk()
     root.title(APP_TITLE)
-    root.geometry("960x900")
-    root.minsize(860, 780)
-    root.resizable(False, False)  # 固定窗口尺寸, 避免 resize 重绘卡顿 (DPI 适配不受影响)
+    # 窗口高度按内容自适应: 先创建全部内容, 再锁定尺寸, 保证任何 DPI 下都完整显示
+    root.geometry("960x1080")
+    root.minsize(860, 900)
     root.configure(bg="#202020")
 
     sv_ttk.set_theme("dark")
@@ -528,7 +528,7 @@ def build_ui():
     ttk.Label(root, text="Flydigi 手柄固件回退工具", style="Title.TLabel").pack(
         anchor="w", padx=24, pady=(16, 0))
     ttk.Label(root, text="1.0.5.8 → 1.0.5.4 备份固件 · 仅适用于黑武士5s", style="Small.TLabel").pack(
-        anchor="w", padx=24, pady=(0, 8))
+        anchor="w", padx=24, pady=(0, 6))
 
     # ---- 步骤卡片 ----
     frm_guide = ttk.Labelframe(root, text=" 操作步骤 — 请按顺序执行, 不要跳步 ", style="Card.TLabelframe")
@@ -544,30 +544,49 @@ def build_ui():
         elif i == 0:
             color, bold = "#ffd166", True
         row = ttk.Frame(frm_guide, style="Card.TFrame")
-        row.pack(fill="x", padx=16, pady=3)
+        row.pack(fill="x", padx=16, pady=1)
         st = ttk.Label(row, text=step, style="StepTitle.TLabel")
         st.pack(side="left", padx=(0, 10))
         lb = tk.Label(row, text=desc, anchor="w", foreground=color,
                       font=("Microsoft YaHei UI", 11, "bold") if bold else ("Microsoft YaHei UI", 11),
-                      bg=CARD_BG, justify="left")
+                      bg=CARD_BG, justify="left", wraplength=640)
         lb.pack(side="left", fill="x", expand=True)
         guide_labels.append(lb)
 
-    # ---- 阅读确认 ----
+    # ---- 阅读确认声明 (定义在操作卡片之前, 控件本体在卡片内创建) ----
     acked = tk.BooleanVar(value=False)
-    chk_ack = tk.Checkbutton(
-        root, variable=acked, anchor="w", justify="left",
-        text='我已阅读以上步骤与免责条款, 知道刷写中不能断开手柄/休眠, 知道本工具会临时修改 hosts/证书/防火墙(点"一键还原"可全部撤销)',
-        font=("Microsoft YaHei UI", 11), bg=CARD_BG, fg=FG,
-        activebackground=CARD_BG, activeforeground=FG,
-        selectcolor="#3a3a3a", highlightthickness=0, bd=0)
 
     # ---- 操作卡片 ----
     frm_top = ttk.Labelframe(root, text=" 操作 ", style="Card.TLabelframe")
     frm_top.pack(fill="x", padx=20, pady=6)
     inner = ttk.Frame(frm_top, style="Card.TFrame")
     inner.pack(fill="x", padx=16, pady=10)
-    chk_ack.pack(in_=inner, anchor="w", pady=(0, 8))
+    tk.Label(inner, text="勾选前请确认: 已读全部 9 步说明; 刷写中不能断开手柄/休眠; 本工具会临时修改 hosts/证书/防火墙(点\"一键还原\"全部撤销)",
+             anchor="w", justify="left", wraplength=640, font=("Microsoft YaHei UI", 10),
+             bg=CARD_BG, fg="#e8b268").pack(fill="x", pady=(0, 6))
+
+    # ---- 阅读确认 (自绘两态按钮, 父容器就是 inner, 不依赖主题渲染) ----
+    acked = tk.BooleanVar(value=False)
+
+    def render_ack():
+        if acked.get():
+            chk_ack.config(text="☑  我已阅读并同意以上步骤与免责条款",
+                           fg=OK_FG, bg="#1d3a1d", relief="sunken")
+        else:
+            chk_ack.config(text="☐  我已阅读并同意以上步骤与免责条款 (点击勾选)",
+                           fg=MUTED, bg="#2b2b2b", relief="raised")
+
+    def toggle_ack():
+        acked.set(not acked.get())
+        render_ack()
+        btn_start.config(state="normal" if acked.get() else "disabled")
+
+    chk_ack = tk.Button(inner, command=toggle_ack, anchor="w", justify="left",
+                        font=("Microsoft YaHei UI", 11, "bold"),
+                        activebackground="#1d3a1d", activeforeground=OK_FG,
+                        bd=1, cursor="hand2")
+    chk_ack.pack(fill="x", pady=(0, 8), ipady=4)
+    render_ack()
 
     ver_row = ttk.Frame(inner, style="Card.TFrame")
     ver_row.pack(fill="x")
@@ -661,68 +680,26 @@ def build_ui():
     btn_restore = ttk.Button(btn_row, text="② 一键还原系统", command=on_restore)
     btn_restore.pack(side="left", ipadx=10, ipady=2)
 
-    def ack_toggle():
-        btn_start.config(state="normal" if acked.get() else "disabled")
-
-    chk_ack.config(command=ack_toggle)
-
     # ---- 状态条 ----
     lbl_status = tk.Label(root, text="状态: 未启动 — 请先阅读上方步骤并勾选确认", anchor="w",
                           bg="#2b2b2b", fg=MUTED, font=("Microsoft YaHei UI", 12, "bold"),
-                          padx=16, pady=8)
-    lbl_status.pack(fill="x", padx=20, pady=6)
+                          padx=16, pady=6)
+    lbl_status.pack(fill="x", padx=20, pady=(6, 2))
 
     # ---- 日志卡片 ----
     frm_log = ttk.Labelframe(root, text=" 日志 ", style="Card.TLabelframe")
-    frm_log.pack(fill="both", expand=True, padx=20, pady=6)
-    txt = scrolledtext.ScrolledText(frm_log, height=11, font=("Microsoft YaHei UI", 11),
+    frm_log.pack(fill="both", expand=True, padx=20, pady=(6, 2))
+    txt = scrolledtext.ScrolledText(frm_log, height=9, font=("Microsoft YaHei UI", 10),
                                     bg="#272727", fg=FG, insertbackground=FG,
                                     relief="flat", padx=10, pady=8, wrap="word")
     txt.pack(fill="both", expand=True, padx=10, pady=8)
-    txt.tag_config("warn", foreground=WARN_FG, font=("Microsoft YaHei UI", 11, "bold"))
-    txt.tag_config("ok", foreground=OK_FG, font=("Microsoft YaHei UI", 11, "bold"))
+    txt.tag_config("warn", foreground=WARN_FG, font=("Microsoft YaHei UI", 10, "bold"))
+    txt.tag_config("ok", foreground=OK_FG, font=("Microsoft YaHei UI", 10, "bold"))
 
     # ---- 免责条款 ----
     lb_dis = tk.Label(root, text=DISCLAIMER, foreground=RED, bg=BG,
-                      font=("Microsoft YaHei UI", 10), justify="left")
-    lb_dis.pack(fill="x", padx=24, pady=(4, 12))
-
-    # ---- 文字随窗口宽度自适应换行 (防抖: 拖动停止后才重排, 避免卡顿) ----
-    _last_sizes = {"guide": 0, "ack": 0, "dis": 0}
-
-    def apply_reflow(w):
-        wg = max(480, w - 170)
-        wa = max(420, w - 110)
-        wd = max(420, w - 70)
-        if _last_sizes["guide"] != wg:
-            _last_sizes["guide"] = wg
-            for lb in guide_labels:
-                lb.configure(wraplength=wg)
-        if _last_sizes["ack"] != wa:
-            _last_sizes["ack"] = wa
-            try:
-                chk_ack.configure(wraplength=wa)
-            except tk.TclError:
-                pass
-        if _last_sizes["dis"] != wd:
-            _last_sizes["dis"] = wd
-            try:
-                lb_dis.configure(wraplength=wd)
-            except tk.TclError:
-                pass
-
-    _reflow_job = [None]
-
-    def schedule_reflow(event=None):
-        if _reflow_job[0] is not None:
-            try:
-                root.after_cancel(_reflow_job[0])
-            except Exception:
-                pass
-        _reflow_job[0] = root.after(100, lambda: apply_reflow(root.winfo_width()))
-
-    root.bind("<Configure>", schedule_reflow)
-    root.after(120, lambda: apply_reflow(root.winfo_width()))
+                      font=("Microsoft YaHei UI", 9), justify="left", wraplength=860)
+    lb_dis.pack(fill="x", padx=24, pady=(2, 8))
 
     def poll():
         try:
@@ -755,6 +732,13 @@ def build_ui():
         else:
             log("未检测到固件文件 — 点击 ① 启动时可自动查找或手动选择")
     poll()
+    # 内容全部布局完成后, 按实际需要的高度锁定窗口 (不小于 900, 不超过屏幕)
+    root.update_idletasks()
+    need_h = root.winfo_reqheight()
+    screen_h = root.winfo_screenheight()
+    final_h = max(900, min(need_h + 16, screen_h - 80))
+    root.geometry(f"960x{final_h}")
+    root.resizable(False, False)
     root.mainloop()
 
 
