@@ -65,7 +65,7 @@ pyinstaller --onefile --noconsole --name FlydigiRollback ^
 
 ### 操作步骤
 
-1. 手柄用 USB 线或 Xbox 无线接收器连接到电脑
+1. 手柄用 USB 线连接到电脑
 2. 运行程序，按提示加载固件（自动检测或点 [选择固件...]）
 3. 勾选"我已阅读"，点 **① 一键启动劫持**（会弹窗二次确认）
 4. 打开 Flydigi Space Station → 设置 → 固件版本，出现 **9.9.9.9** 的升级提示
