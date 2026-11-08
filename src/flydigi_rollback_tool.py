@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
 Flydigi 手柄固件回退工具 (OTA 本地劫持)
-用途: 将刷了 1.0.5.8 的手柄回退到用户提供的备份固件 (自动检测本机 LocalState 备份或手动选择)
+用途: 将刷了 1.0.5.8 的手柄回退到用户提供的备份固件 (点击选择或拖入 .bin 固件文件)
 原理: 劫持 testapi/api.flydigi.com 到本机, 让官方应用把指定固件当作"新版"刷入手柄
 """
 import base64
 import ctypes
-import glob
 import json
 import os
 import queue
@@ -18,11 +17,17 @@ import threading
 import http.server
 
 import tkinter as tk
+import tkinter.font as tkfont
 import tkinter.messagebox as tkmb
 import tkinter.filedialog as tkfd
 from tkinter import scrolledtext, ttk
 
 import sv_ttk
+
+try:
+    import windnd  # 鼠标拖放文件支持 (纯 Python, 仅 Windows)
+except ImportError:
+    windnd = None
 
 APP_TITLE = "Flydigi 手柄固件回退工具 (1.0.5.8 -> 备份固件)"
 HOSTS_PATH = os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32", "drivers", "etc", "hosts")
@@ -67,22 +72,6 @@ def load_fw_file(path):
     FW_PATH = path
     FW_INFO = parse_fw_info(data)
     return FW_INFO
-
-
-def detect_local_fw():
-    """自动查找本机 Flydigi 应用 LocalState 里留存的 OTA 固件备份"""
-    pats = [
-        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Packages",
-                     "Flydigi.FlydigiSpaceStationForXbox*", "LocalState", "*.bin"),
-        os.path.join(res(""), "ota_v1.0.0.6.bin"),
-    ]
-    hits = []
-    for p in pats:
-        if "*" in p:
-            hits += glob.glob(p)
-        elif os.path.exists(p):
-            hits.append(p)
-    return max(hits, key=os.path.getmtime) if hits else None
 
 
 CERT_DIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), "FlydigiRollbackTool")
@@ -280,6 +269,33 @@ class OtaHandler(http.server.BaseHTTPRequestHandler):
             log(f"  -> 返回固件版本 {self.fw_version} (诱导升级到备份固件)")
             self._send(200, json.dumps(resp).encode(), "application/json")
         elif path.endswith(".bin"):
+            rng = self.headers.get("Range", "")
+            log(f"  [下载] UA={self.headers.get('User-Agent', '-')[:60]}  Range={rng or '无'}")
+            # 支持 Range 分段下载 (HTTP 206): UWP 后台传输器可能使用
+            if rng.startswith("bytes="):
+                try:
+                    s, e = rng[6:].split("-", 1)
+                    start = int(s)
+                    end = int(e) if e else len(FW_DATA) - 1
+                    end = min(end, len(FW_DATA) - 1)
+                    if start >= len(FW_DATA) or start > end:
+                        self.send_response(416)
+                        self.send_header("Content-Range", f"bytes */{len(FW_DATA)}")
+                        self.send_header("Content-Length", "0")
+                        self.end_headers()
+                        return
+                    chunk = FW_DATA[start:end + 1]
+                    self.send_response(206)
+                    self.send_header("Content-Type", "application/octet-stream")
+                    self.send_header("Content-Range", f"bytes {start}-{end}/{len(FW_DATA)}")
+                    self.send_header("Accept-Ranges", "bytes")
+                    self.send_header("Content-Length", str(len(chunk)))
+                    self.end_headers()
+                    self.wfile.write(chunk)
+                    log(f"  -> 206 分段下发 {len(chunk):,} 字节 (Range {start}-{end})")
+                    return
+                except ValueError:
+                    pass
             log("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!", "warn")
             log("  固件已下发! 手柄正在升级 — 刷写中切勿断开手柄/休眠电脑!", "warn")
             log(f"  (已发送 {len(FW_DATA)} 字节)", "warn")
@@ -458,10 +474,10 @@ def do_restore():
 # ---------------- UI ----------------
 GUIDE = [
     ("第 1 步", "仅适用于飞智黑武士5s"),
-    ("第 2 步", "程序自动查找本机留存的固件备份, 也可点 [选择固件] 手动指定 .bin 文件"),
-    ("第 3 步", "手柄用 USB 线或 Xbox 无线接收器连接到这台电脑"),
-    ("第 4 步", "确认这台电脑已安装 [Flydigi Space Station] 应用 (能正常打开它)"),
-    ("第 5 步", "勾选下方\"我已阅读\"后点 [① 一键启动劫持], 等日志出现 \"劫持已就绪\""),
+    ("第 2 步", "点击固件框选择 .bin 文件, 或直接把固件文件拖进固件框 (测试固件在仓库 firmware/ 目录)"),
+    ("第 3 步", "用 USB 线把手柄连接到这台电脑 (本手柄仅支持有线连接)"),
+    ("第 4 步", "确认这台电脑已安装 [Flydigi Space Station] 应用 (能正常打开它), 并退出加速器/Clash 等网络代理工具"),
+    ("第 5 步", "勾选右侧\"我已阅读\"后点 [① 一键启动劫持], 等日志出现 \"劫持已就绪\""),
     ("第 6 步", "打开 Flydigi Space Station → 设置 → 固件版本, 会出现 9.9.9.9 的升级提示"),
     ("第 7 步", "点 [确认升级] — 之后什么都不要碰! 刷写中断开手柄可能导致手柄报废(变砖)"),
     ("第 8 步", "手柄重启后查看固件版本: 显示 1.0.5.4 即回退成功 (使用其他固件则显示对应版本)"),
@@ -501,9 +517,9 @@ def apply_win11_window(root):
 def build_ui():
     root = tk.Tk()
     root.title(APP_TITLE)
-    # 窗口高度按内容自适应: 先创建全部内容, 再锁定尺寸, 保证任何 DPI 下都完整显示
-    root.geometry("960x1080")
-    root.minsize(860, 900)
+    # 左右分区布局: 左列=操作步骤, 右列=操作/状态/日志; 高度按内容自适应
+    root.geometry("1080x780")
+    root.minsize(1000, 660)
     root.configure(bg="#202020")
 
     sv_ttk.set_theme("dark")
@@ -523,6 +539,12 @@ def build_ui():
     style.configure("StepTitle.TLabel", font=("Microsoft YaHei UI", 11, "bold"), foreground="#7cc7ff")
     style.configure("StepKey.TLabel", font=("Microsoft YaHei UI", 11, "bold"))
     style.configure("Small.TLabel", font=("Microsoft YaHei UI", 10), foreground=MUTED)
+    # 卡片标题字体: 操作步骤用大标题, 操作/日志用中号
+    style.configure("Card.TLabelframe.Label", font=("Microsoft YaHei UI", 15, "bold"),
+                    foreground="#e8e8e8", padding=(0, 2))
+    style.configure("Mid.TLabelframe.Label", font=("Microsoft YaHei UI", 12, "bold"),
+                    foreground="#cfcfcf", padding=(0, 2))
+    style.configure("Mid.TLabelframe", background=CARD_BG, bordercolor="#3f3f3f")
 
     # ---- 顶部标题 ----
     ttk.Label(root, text="Flydigi 手柄固件回退工具", style="Title.TLabel").pack(
@@ -530,10 +552,16 @@ def build_ui():
     ttk.Label(root, text="1.0.5.8 → 1.0.5.4 备份固件 · 仅适用于黑武士5s", style="Small.TLabel").pack(
         anchor="w", padx=24, pady=(0, 6))
 
-    # ---- 步骤卡片 ----
-    frm_guide = ttk.Labelframe(root, text=" 操作步骤 — 请按顺序执行, 不要跳步 ", style="Card.TLabelframe")
-    frm_guide.pack(fill="x", padx=20, pady=6)
-    guide_labels = []
+    # ---- 主体: 左右分区 ----
+    body = ttk.Frame(root)
+    body.pack(fill="both", expand=True, padx=20, pady=6)
+
+    # ---- 左列: 步骤卡片 (固定宽度, 右列拿走剩余宽度) ----
+    frm_guide = ttk.Labelframe(body, text=" 操作步骤 — 请按顺序执行, 不要跳步 ", style="Card.TLabelframe")
+    frm_guide.configure(width=440)
+    frm_guide.pack(side="left", fill="y", padx=(0, 10))
+    frm_guide.pack_propagate(False)
+    guide_rows = []
     for i, (step, desc) in enumerate(GUIDE):
         color = "#e4e4e4"
         bold = False
@@ -544,26 +572,28 @@ def build_ui():
         elif i == 0:
             color, bold = "#ffd166", True
         row = ttk.Frame(frm_guide, style="Card.TFrame")
-        row.pack(fill="x", padx=16, pady=1)
+        row.pack(fill="x", padx=12, pady=2)
         st = ttk.Label(row, text=step, style="StepTitle.TLabel")
-        st.pack(side="left", padx=(0, 10))
+        st.pack(side="left", padx=(0, 8), anchor="n")
         lb = tk.Label(row, text=desc, anchor="w", foreground=color,
                       font=("Microsoft YaHei UI", 11, "bold") if bold else ("Microsoft YaHei UI", 11),
-                      bg=CARD_BG, justify="left", wraplength=640)
+                      bg=CARD_BG, justify="left")
         lb.pack(side="left", fill="x", expand=True)
-        guide_labels.append(lb)
+        guide_rows.append((row, st, lb))
 
-    # ---- 阅读确认声明 (定义在操作卡片之前, 控件本体在卡片内创建) ----
-    acked = tk.BooleanVar(value=False)
+    # ---- 右列: 操作/状态/日志 ----
+    col_right = ttk.Frame(body)
+    col_right.pack(side="left", fill="both", expand=True)
 
     # ---- 操作卡片 ----
-    frm_top = ttk.Labelframe(root, text=" 操作 ", style="Card.TLabelframe")
-    frm_top.pack(fill="x", padx=20, pady=6)
+    frm_top = ttk.Labelframe(col_right, text=" 操作 ", style="Mid.TLabelframe")
+    frm_top.pack(fill="x", pady=(0, 6))
     inner = ttk.Frame(frm_top, style="Card.TFrame")
     inner.pack(fill="x", padx=16, pady=10)
-    tk.Label(inner, text="勾选前请确认: 已读全部 9 步说明; 刷写中不能断开手柄/休眠; 本工具会临时修改 hosts/证书/防火墙(点\"一键还原\"全部撤销)",
-             anchor="w", justify="left", wraplength=640, font=("Microsoft YaHei UI", 10),
-             bg=CARD_BG, fg="#e8b268").pack(fill="x", pady=(0, 6))
+    lb_confirm = tk.Label(inner, text="勾选前请确认: 已读全部 9 步说明; 刷写中不能断开手柄/休眠; 本工具会临时修改 hosts/证书/防火墙(点\"一键还原\"全部撤销)",
+                          anchor="w", justify="left", font=("Microsoft YaHei UI", 10),
+                          bg=CARD_BG, fg="#e8b268")
+    lb_confirm.pack(fill="x", pady=(0, 6))
 
     # ---- 阅读确认 (自绘两态按钮, 父容器就是 inner, 不依赖主题渲染) ----
     acked = tk.BooleanVar(value=False)
@@ -594,13 +624,22 @@ def build_ui():
     ver = tk.StringVar(value=FW_VERSION_DEFAULT)
     ttk.Entry(ver_row, textvariable=ver, width=10).pack(side="left", padx=8)
 
-    # ---- 固件文件选择 ----
-    fw_row = ttk.Frame(inner, style="Card.TFrame")
-    fw_row.pack(fill="x", pady=(8, 0))
-    ttk.Label(fw_row, text="回退固件文件:", style="Step.TLabel").pack(side="left")
-    lbl_fw = tk.Label(fw_row, text="未加载", anchor="w", foreground=MUTED, bg=CARD_BG,
-                      font=("Microsoft YaHei UI", 10))
-    lbl_fw.pack(side="left", padx=8, fill="x", expand=True)
+    # ---- 固件选择 (大拖放框: 点击选择 / 拖入 .bin) ----
+    def fw_box_text():
+        if FW_DATA:
+            return f"☑  {os.path.basename(FW_PATH)}\n版本 {FW_INFO} · {len(FW_DATA):,} 字节 · 可点击重新选择"
+        return "将固件 .bin 文件拖拽到这个框里\n或点击此处选择固件文件"
+
+    drop_box = tk.Label(inner, text=fw_box_text(), anchor="center", justify="center",
+                        font=("Microsoft YaHei UI", 11),
+                        bg="#2f2f2f", fg=MUTED, relief="ridge", bd=2, cursor="hand2")
+    drop_box.pack(fill="x", ipady=12, pady=(0, 8))
+
+    def update_drop_box():
+        if FW_DATA:
+            drop_box.config(text=fw_box_text(), fg=OK_FG, bg="#1d3a1d")
+        else:
+            drop_box.config(text=fw_box_text(), fg=MUTED, bg="#2f2f2f")
 
     def pick_fw():
         p = tkfd.askopenfilename(
@@ -610,35 +649,44 @@ def build_ui():
             return
         try:
             info = load_fw_file(p)
-            lbl_fw.config(text=f"{os.path.basename(p)}  ({len(FW_DATA):,} 字节, 版本 {info})", foreground=FG)
+            update_drop_box()
             log(f"[固件] 已加载: {p}")
             log(f"[固件] 版本 {info}, {len(FW_DATA):,} 字节")
         except Exception as e:
             tkmb.showerror("固件无效", f"无法加载该文件:\n{e}")
 
-    btn_fw = ttk.Button(fw_row, text="选择固件...", command=pick_fw)
-    btn_fw.pack(side="right")
+    drop_box.bind("<Button-1>", lambda e: pick_fw())
+
+    if windnd is not None:
+        def on_dropped(files):
+            try:
+                if not files:
+                    return
+                raw = files[0]
+                try:
+                    p = raw.decode("utf-8")
+                except UnicodeDecodeError:
+                    p = raw.decode("gbk", "replace")
+                info = load_fw_file(p)
+                update_drop_box()
+                log(f"[固件] 拖入加载: {p}")
+                log(f"[固件] 版本 {info}, {len(FW_DATA):,} 字节")
+            except Exception as e:
+                tkmb.showerror("固件无效", f"无法加载拖入的文件:\n{e}")
+        try:
+            windnd.hook_dropfiles(drop_box, func=on_dropped)
+        except Exception:
+            pass  # 拖放不可用时仍可点击选择
 
     def ensure_fw():
-        """启动前确保固件已加载: 自动检测 -> 手动选择"""
+        """启动前确保固件已加载 (仅手动: 点击选择或拖入)"""
         if FW_DATA:
             return True
-        auto = detect_local_fw()
-        if auto:
-            try:
-                info = load_fw_file(auto)
-                lbl_fw.config(text=f"{os.path.basename(auto)}  ({len(FW_DATA):,} 字节, 版本 {info})", foreground=FG)
-                log(f"[固件] 自动找到本机备份: {auto}")
-                log(f"[固件] 版本 {info}, {len(FW_DATA):,} 字节")
-                return True
-            except Exception:
-                pass
         tkmb.showinfo(
             "需要固件文件",
-            "未在本机找到固件备份。\n\n"
-            "程序会查找 Flydigi 应用升级时留下的 LocalState 备份 (ota_*.bin),\n"
-            "找不到时请手动选择固件 .bin 文件\n"
-            "(可从项目仓库 firmware/ 下载测试固件, 或使用自己的备份)。")
+            "还没有加载固件。\n\n"
+            "请点击固件框选择 .bin 文件, 或直接把 .bin 文件拖进固件框\n"
+            "(测试固件可从项目仓库 firmware/ 目录下载)。")
         pick_fw()
         return bool(FW_DATA)
 
@@ -651,7 +699,8 @@ def build_ui():
             "  · 安装自签证书到受信任的根证书颁发机构\n"
             "  · 为 Flydigi 应用添加 UWP 回环豁免\n"
             "  · 放行防火墙 80/443 并启动本地升级服务器\n\n"
-            "确认手柄已连接, 且理解刷写中断可能变砖。\n"
+            "确认手柄已用 USB 线连接、已退出加速器/代理工具,\n"
+            "且理解刷写中断可能变砖。\n"
             "因使用本工具造成的一切损失由使用者自行承担。\n\n"
             "确定开始吗?",
             icon="warning")
@@ -681,14 +730,14 @@ def build_ui():
     btn_restore.pack(side="left", ipadx=10, ipady=2)
 
     # ---- 状态条 ----
-    lbl_status = tk.Label(root, text="状态: 未启动 — 请先阅读上方步骤并勾选确认", anchor="w",
+    lbl_status = tk.Label(col_right, text="状态: 未启动 — 请先阅读左侧步骤并勾选确认", anchor="w",
                           bg="#2b2b2b", fg=MUTED, font=("Microsoft YaHei UI", 12, "bold"),
                           padx=16, pady=6)
-    lbl_status.pack(fill="x", padx=20, pady=(6, 2))
+    lbl_status.pack(fill="x", pady=(0, 6))
 
     # ---- 日志卡片 ----
-    frm_log = ttk.Labelframe(root, text=" 日志 ", style="Card.TLabelframe")
-    frm_log.pack(fill="both", expand=True, padx=20, pady=(6, 2))
+    frm_log = ttk.Labelframe(col_right, text=" 日志 ", style="Mid.TLabelframe")
+    frm_log.pack(fill="both", expand=True, pady=(0, 2))
     txt = scrolledtext.ScrolledText(frm_log, height=9, font=("Microsoft YaHei UI", 10),
                                     bg="#272727", fg=FG, insertbackground=FG,
                                     relief="flat", padx=10, pady=8, wrap="word")
@@ -698,7 +747,7 @@ def build_ui():
 
     # ---- 免责条款 ----
     lb_dis = tk.Label(root, text=DISCLAIMER, foreground=RED, bg=BG,
-                      font=("Microsoft YaHei UI", 9), justify="left", wraplength=860)
+                      font=("Microsoft YaHei UI", 9), justify="left")
     lb_dis.pack(fill="x", padx=24, pady=(2, 8))
 
     def poll():
@@ -724,20 +773,38 @@ def build_ui():
     log(f"管理员权限: {'是' if is_admin() else '否(将尝试提权)'}")
     if FW_DATA:
         log(f"固件已就绪: {os.path.basename(FW_PATH)} ({len(FW_DATA):,} 字节, 版本 {FW_INFO})")
-        lbl_fw.config(text=f"{os.path.basename(FW_PATH)}  ({len(FW_DATA):,} 字节, 版本 {FW_INFO})", foreground=FG)
+        update_drop_box()
     else:
-        auto = detect_local_fw()
-        if auto:
-            log(f"检测到本机固件备份: {auto} (点击 ① 启动时自动加载)")
-        else:
-            log("未检测到固件文件 — 点击 ① 启动时可自动查找或手动选择")
+        log("未加载固件 — 请点击固件框选择, 或将 .bin 文件拖入固件框")
     poll()
-    # 内容全部布局完成后, 按实际需要的高度锁定窗口 (不小于 900, 不超过屏幕)
+    # 布局完成后: 按各控件实际宽度计算换行宽度 (自动适配任意 DPI/分辨率),
+    # 再按内容实际需要的高度锁定窗口; 屏幕不够高时自动收缩日志区行数
+    def fit_text():
+        w_inner = inner.winfo_width()
+        for row, st, lb in guide_rows:
+            lb.configure(wraplength=max(300, row.winfo_width() - st.winfo_reqwidth() - 14))
+        lb_confirm.configure(wraplength=max(300, w_inner - 4))
+        chk_ack.configure(wraplength=max(300, w_inner - 20))
+        drop_box.configure(wraplength=max(300, w_inner - 24))
+        lb_dis.configure(wraplength=max(300, root.winfo_width() - 48))
+
     root.update_idletasks()
+    root.update()  # 强制完成窗口映射与首次布局, 否则 winfo 宽度不可用
+    fit_text()
+    root.update()
+    root.update_idletasks()
+
     need_h = root.winfo_reqheight()
-    screen_h = root.winfo_screenheight()
-    final_h = max(900, min(need_h + 16, screen_h - 80))
-    root.geometry(f"960x{final_h}")
+    avail = root.winfo_screenheight() - 60
+    if need_h > avail:
+        line_h = tkfont.Font(font=txt.cget("font")).metrics("linespace")
+        cut = need_h - avail
+        lines = max(4, int(txt.cget("height")) - cut // max(line_h, 1) - 1)
+        txt.config(height=lines)
+        root.update_idletasks()
+        need_h = root.winfo_reqheight()
+    final_h = max(660, min(need_h + 16, avail))
+    root.geometry(f"1080x{final_h}")
     root.resizable(False, False)
     root.mainloop()
 
@@ -745,8 +812,17 @@ def build_ui():
 # ---------------- 入口 ----------------
 def selftest():
     global CER, PEM, KEY
-    path = detect_local_fw()
-    assert path, "selftest 未找到固件文件"
+    # 固件来源: 命令行传入的 .bin 路径, 或程序目录下的 ota_v1.0.0.6.bin
+    path = None
+    for a in sys.argv[1:]:
+        if a.lower().endswith(".bin") and os.path.exists(a):
+            path = a
+            break
+    if not path:
+        cand = os.path.join(res(""), "ota_v1.0.0.6.bin")
+        if os.path.exists(cand):
+            path = cand
+    assert path, "selftest 需要固件: 传入 .bin 路径, 或将 ota_v1.0.0.6.bin 放在程序目录"
     info = load_fw_file(path)
     assert len(FW_DATA) > 0x400 and FW_DATA[:4] == b"AOTA", "固件数据异常"
     print("FW:", os.path.basename(path), info, len(FW_DATA), "bytes")
